@@ -1,0 +1,93 @@
+# flows.yaml — the complete list of what Claude may run on this server.
+#
+# Nothing outside this file can be run. Each flow is a fixed command (a list of
+# words, never a shell line). A "{name}" placeholder is filled from a parameter,
+# and the parameter must match its pattern or the run is refused.
+#
+# Copy this file to /srv/lab/flows.yaml (the setup script does it for you), edit,
+# then run:  lab check && lab restart && lab schedules
+
+projects:
+  thesis-monitor:
+    description: >
+      Thesis Drift Monitor — the open-source investment thesis tracker from the
+      Agentic AI series at funaibuddy.com/agentic-ai/
+    repo: https://github.com/psachdev/thesis-drift-monitor.git
+    path: thesis-drift-monitor
+    extra_repos:                       # cloned next to the project (it imports this one)
+      - repo: https://github.com/psachdev/sec_data_downloader.git
+        path: sec_data_downloader
+    env_file: thesis-monitor.env       # lives in /srv/lab/secrets, never in a repository
+    env_keys:                          # `lab secrets thesis-monitor` asks for these
+      - name: DEEPSEEK_API_KEY
+        description: DeepSeek API key (used only by the capture and audit flows)
+      - name: SEC_USER_AGENT
+        description: 'Your name and email, as the SEC asks, e.g. Jane Doe jane@example.com'
+    deny_read: [sources, "*.pdf", data/theses.real, data/theses.raw, "data/portfolio.real.json"]
+    setup:
+      - [python, -m, venv, .venv]
+      - [.venv/bin/pip, install, -r, ../sec_data_downloader/requirements.txt]
+      - [.venv/bin/pip, install, -r, requirements.txt, pytest]
+    flows:
+      digest:
+        description: Print the full morning note from the local logs (no network, no AI).
+        command: [.venv/bin/python, digest.py]
+        timeout: 120
+        uses_secrets: false
+      nightly:
+        description: The daily check — read new SEC filings, judge every claim, then build the morning note.
+        steps:
+          - [.venv/bin/python, run_nightly.py]
+          - [.venv/bin/python, digest.py]
+        timeout: 1800
+        schedule: "*-*-* 11:00:00 America/Los_Angeles"
+      nightly-dry-run:
+        description: Recompute every claim and print the result. Saves nothing.
+        command: [.venv/bin/python, run_nightly.py, --dry-run, --force]
+        timeout: 1800
+      nightly-force:
+        description: Recompute every claim and append new or corrected verdicts to the evidence log.
+        command: [.venv/bin/python, run_nightly.py, --force]
+        timeout: 1800
+      tests:
+        description: Run the project's test suite.
+        command: [.venv/bin/python, -m, pytest, -q]
+        timeout: 900
+        uses_secrets: false
+      consolidate-dry-run:
+        description: Preview copying the reviewed master list of claims into the live folder. Saves nothing.
+        command: [.venv/bin/python, consolidate.py, --profile, real, --dry-run]
+        timeout: 300
+        uses_secrets: false
+      consolidate:
+        description: Copy the reviewed master list of claims into the live folder (old copies are archived).
+        command: [.venv/bin/python, consolidate.py, --profile, real]
+        timeout: 300
+        uses_secrets: false
+      capture-dry-run:
+        description: Module 1 — extract candidate claims from a research document. Saves nothing.
+        command: [.venv/bin/python, capture.py, --ticker, "{ticker}", --price, "{price}", --model, deepseek-v4-pro, --profile, real, --dry-run, "{file}"]
+        params:
+          ticker: {pattern: "[A-Z]{1,5}", description: "Stock ticker, e.g. STRL"}
+          price: {pattern: "[0-9]{1,6}(\\.[0-9]{1,4})?", description: "Latest closing price"}
+          file: {pattern: "sources/[A-Za-z0-9 _.()-]{1,120}\\.pdf", description: "A PDF inside the private sources folder"}
+        timeout: 900
+      audit:
+        description: Module 1 — AI double-check of every kill criterion for one ticker.
+        command: [.venv/bin/python, audit.py, --profile, real, --ticker, "{ticker}", --model, deepseek-v4-pro, --framing, neutral]
+        params:
+          ticker: {pattern: "[A-Z]{1,5}", description: "Stock ticker, e.g. BWXT"}
+        timeout: 900
+      update:
+        description: Pull the latest merged code from GitHub (code changes go through GitHub, never through chat).
+        steps:
+          - [git, pull, --ff-only, --autostash]
+          - [git, -C, ../sec_data_downloader, pull, --ff-only]
+          - [git, log, --oneline, "-3"]
+        timeout: 300
+        uses_secrets: false
+      git-status:
+        description: Show which files changed on the server since the last pull.
+        command: [git, status, --short, --branch]
+        timeout: 60
+        uses_secrets: false

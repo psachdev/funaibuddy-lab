@@ -1,0 +1,4 @@
+# Pinned on purpose: the mcp library changed its interface between 1.x and 2.x.
+mcp==2.3.0
+uvicorn==0.54.0
+PyYAML==6.0.3

@@ -1,0 +1,47 @@
+# Two small containers:
+#   connector - the MCP server that runs your named flows (no extra privileges, read-only system)
+#   caddy     - the front door: HTTPS certificate + "Anthropic addresses only" rule
+#
+# Start with:  lab up     (which runs: docker compose --env-file /etc/funaibuddy-lab/lab.env up -d --build)
+
+services:
+  connector:
+    build: ./connector
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:exec,size=512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+    pids_limit: 256
+    ports:
+      - "127.0.0.1:8000:8000"          # only reachable from the server itself
+    environment:
+      LAB_DOMAIN: ${LAB_DOMAIN:?set LAB_DOMAIN in lab.env}
+      LAB_TOKEN: ${LAB_TOKEN:?set LAB_TOKEN in lab.env}
+      TZ: ${LAB_TZ:-America/Los_Angeles}
+    volumes:
+      - /srv/lab/flows.yaml:/srv/lab/flows.yaml:ro
+      - /srv/lab/secrets:/srv/lab/secrets:ro
+      - /srv/lab/projects:/srv/lab/projects
+      - /srv/lab/logs:/srv/lab/logs
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host                  # so the server firewall (ufw) applies to it
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      LAB_DOMAIN: ${LAB_DOMAIN}
+      LAB_ALLOWED_IPS: ${LAB_ALLOWED_IPS:-160.79.104.0/21}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

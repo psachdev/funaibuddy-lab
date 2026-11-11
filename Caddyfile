@@ -1,0 +1,20 @@
+{
+	admin off
+}
+
+{$LAB_DOMAIN} {
+	# Only Anthropic's published addresses get through; everyone else sees "not found".
+	@allowed remote_ip {$LAB_ALLOWED_IPS}
+
+	handle @allowed {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle {
+		respond 404
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

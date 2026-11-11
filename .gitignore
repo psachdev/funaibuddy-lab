@@ -1,0 +1,14 @@
+# Secrets and server-only files never belong in this repository
+.env
+*.env
+!.env.example
+lab.env
+flows.yaml
+secrets/
+*.key
+*.pem
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.DS_Store

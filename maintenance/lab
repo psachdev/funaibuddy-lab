@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# lab — day-to-day upkeep of a funaibuddy-lab server. Run "lab help".
+set -euo pipefail
+
+REPO_DIR=/opt/funaibuddy-lab
+ENV_FILE=/etc/funaibuddy-lab/lab.env
+LAB_UID=10001
+
+dc()    { docker compose --project-directory "$REPO_DIR" --env-file "$ENV_FILE" "$@"; }
+admin() { dc exec -T connector python -m labconnector.admin "$@"; }
+once()  { dc run --rm --no-deps -T connector python -m labconnector.admin "$@"; }
+need_root() { [ "$(id -u)" -eq 0 ] || { echo "Run as root."; exit 1; }; }
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  up)        need_root; dc up -d --build ;;
+  down)      need_root; dc down ;;
+  restart)   need_root; once check && dc up -d --force-recreate ;;
+  logs)      dc logs --tail "${2:-100}" ${1:-} ;;
+  check)     once check ;;
+  projects)  once projects ;;
+  run)       admin run "$@" ;;
+  audit)     tail -n "${1:-20}" /srv/lab/logs/audit.jsonl ;;
+
+  project-setup)
+    need_root; [ -n "${1:-}" ] || { echo "usage: lab project-setup <project>"; exit 1; }
+    admin setup "$1" ;;
+
+  secrets)
+    need_root; [ -n "${1:-}" ] || { echo "usage: lab secrets <project>"; exit 1; }
+    mapfile -t rows < <(admin env-keys "$1")
+    [ "${#rows[@]}" -gt 0 ] || { echo "Project '$1' needs no secrets."; exit 0; }
+    file="/srv/lab/secrets/$(cut -f1 <<<"${rows[0]}")"
+    touch "$file"; chmod 600 "$file"
+    echo "Secrets for '$1' are typed here and stored only in $file."
+    echo "Nothing you type is shown. Press Enter to keep a value that is already set."
+    for row in "${rows[@]}"; do
+      key=$(cut -f2 <<<"$row"); desc=$(cut -f3 <<<"$row")
+      have=""; grep -q "^$key=" "$file" && have=" [already set]"
+      if [[ "$key" =~ (KEY|TOKEN|SECRET|PASSWORD) ]]; then
+        read -r -s -p "  $key — $desc$have: " value </dev/tty; echo
+      else
+        read -r -p "  $key — $desc$have: " value </dev/tty
+      fi
+      [ -z "$value" ] && continue
+      grep -v "^$key=" "$file" > "$file.new" || true
+      printf '%s="%s"\n' "$key" "$value" >> "$file.new"
+      mv "$file.new" "$file"
+    done
+    chown $LAB_UID:$LAB_UID "$file"; chmod 600 "$file"
+    echo "Saved." ;;
+
+  schedules)
+    need_root
+    rm -f /etc/systemd/system/lab-flow-*.service /etc/systemd/system/lab-flow-*.timer
+    while IFS=$'\t' read -r project flow when; do
+      [ -n "$project" ] || continue
+      unit="lab-flow-$project-$flow"
+      cat > "/etc/systemd/system/$unit.service" <<EOF
+[Unit]
+Description=funaibuddy-lab: $project / $flow
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lab run $project $flow
+EOF
+      cat > "/etc/systemd/system/$unit.timer" <<EOF
+[Unit]
+Description=Schedule for $project / $flow
+[Timer]
+OnCalendar=$when
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+      systemctl daemon-reload
+      systemctl enable --now "$unit.timer" >/dev/null
+      echo "scheduled: $project / $flow  ->  $when"
+    done < <(admin schedules)
+    systemctl daemon-reload
+    systemctl list-timers 'lab-flow-*' --no-pager 2>/dev/null | head -n 12 || true ;;
+
+  update)
+    need_root
+    git -C "$REPO_DIR" pull --ff-only
+    once check
+    dc up -d --build
+    "$0" schedules ;;
+
+  rotate-token)
+    need_root
+    new=$(openssl rand -hex 32)
+    sed -i "s|^LAB_TOKEN=.*|LAB_TOKEN=$new|" "$ENV_FILE"
+    dc up -d --force-recreate connector
+    echo "New connector token (update it in your password manager and in Claude's connector settings):"
+    echo "    $new" ;;
+
+  doctor)
+    . "$ENV_FILE"; bad=0
+    report() { if [ "$1" -eq 0 ]; then echo "  ok    $2"; else echo "  FAIL  $2"; bad=1; fi; }
+    curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1;            report $? "connector is answering"
+    dc ps --status running 2>/dev/null | grep -q caddy;                  report $? "front door (caddy) is running"
+    admin check >/dev/null 2>&1;                                         report $? "flows.yaml is valid"
+    ufw status 2>/dev/null | grep -q "Status: active";                   report $? "firewall is on"
+    sshd -T 2>/dev/null | grep -qi "^passwordauthentication no";         report $? "remote login refuses passwords"
+    [ -z "$(find /srv/lab/secrets "$ENV_FILE" -type f -perm /077 2>/dev/null)" ]; report $? "secret files are private"
+    here=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
+    there=$(getent ahostsv4 "$LAB_DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')
+    [ -n "$here" ] && [ "$here" = "$there" ];                            report $? "domain $LAB_DOMAIN points at this server"
+    curl -sS --max-time 8 --resolve "$LAB_DOMAIN:443:127.0.0.1" "https://$LAB_DOMAIN/" -o /dev/null 2>/dev/null; report $? "HTTPS certificate is valid"
+    grep -qs 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades; report $? "automatic security updates are on"
+    exit $bad ;;
+
+  status)
+    dc ps
+    echo; systemctl list-timers 'lab-flow-*' --no-pager 2>/dev/null | head -n 12 || true
+    echo; "$0" doctor ;;
+
+  *)
+    cat <<'EOF'
+lab — upkeep for a funaibuddy-lab server
+
+  lab status                 containers, schedules and a health check
+  lab doctor                 health check only
+  lab logs [service] [n]     recent logs (service: connector or caddy)
+  lab audit [n]              the last n flow runs (who ran what, when, result)
+  lab check                  validate /srv/lab/flows.yaml
+  lab restart                validate, then restart (needed after editing flows.yaml)
+  lab schedules              (re)create the timers for scheduled flows
+  lab run <project> <flow> [name=value ...]   run a flow now
+  lab secrets <project>      type or replace a project's secrets
+  lab project-setup <project>  clone a project and install what it needs
+  lab update                 pull the newest funaibuddy-lab and rebuild
+  lab rotate-token           replace the connector token
+  lab up | lab down          start or stop everything
+EOF
+    ;;
+esac
