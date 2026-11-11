@@ -7,7 +7,7 @@ Read this before trusting the lab with a key that costs money.
 | Layer | Stops |
 |---|---|
 | Firewall (ufw): port 443 open only to Anthropic's published range `160.79.104.0/21`; port 80 open for certificate renewal only; everything else closed | Scanners and strangers reaching the connector at all |
-| Remote login (SSH) closed to the internet by default, passwords disabled | Password guessing. Emergency access is your host's browser console |
+| Remote login (SSH): passwords disabled. Either open for one public key you supply (rate-limited), or closed completely | Password guessing. If you close it completely, your host's browser console is the only emergency door, so confirm it works first |
 | Caddy repeats the address check and answers 404 to anyone else | A firewall mistake exposing the connector |
 | Secret token in the `Authorization` header, compared in constant time, 404 on failure | Another Anthropic customer who learns your address |
 | Host-name check on every request | A class of browser trick called DNS rebinding |

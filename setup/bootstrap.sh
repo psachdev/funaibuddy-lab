@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/psachdev/funaibuddy-lab/main/setup/bootstrap.sh | bash
 #
 # Safe to run again: every step checks before it changes anything.
-# It asks for three things: your domain, a connector token, and your project's secrets.
+# It asks for your domain, a connector token, an optional SSH public key, and your project secrets.
 set -euo pipefail
 
 REPO_URL="${LAB_REPO_URL:-https://github.com/psachdev/funaibuddy-lab.git}"
@@ -36,7 +36,25 @@ fi
 [[ "$LAB_TOKEN" =~ ^[A-Za-z0-9._~+-]+$ ]] || { echo "Use only letters, digits and . _ ~ + - in the token."; exit 1; }
 LAB_ALLOWED_IPS="${LAB_ALLOWED_IPS:-160.79.104.0/21}"   # Anthropic's published outbound range
 LAB_TZ="${LAB_TZ:-America/Los_Angeles}"
-LAB_SSH="${LAB_SSH:-closed}"                             # closed | keys
+LAB_SSH="${LAB_SSH:-}"                                   # closed | keys
+if [ -z "$LAB_SSH" ]; then
+  echo "Emergency door. Paste an SSH PUBLIC key (one line starting with ssh-ed25519 or ssh-rsa) to keep" >/dev/tty
+  echo "remote login open for that key only. Press Enter to close remote login completely" >/dev/tty
+  echo "(then your host's browser console is the only way in, so check that it works for you first)." >/dev/tty
+  LAB_SSH_PUBKEY=$(ask "Public key: ")
+  if [ -n "$LAB_SSH_PUBKEY" ]; then
+    [[ "$LAB_SSH_PUBKEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\ [A-Za-z0-9+/=]+ ]] || { echo "That is not a public key."; exit 1; }
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    grep -qxF "$LAB_SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null || echo "$LAB_SSH_PUBKEY" >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+    LAB_SSH=keys
+  else
+    LAB_SSH=closed
+  fi
+fi
+if [ "$LAB_SSH" = "keys" ] && ! [ -s /root/.ssh/authorized_keys ]; then
+  echo "LAB_SSH=keys but /root/.ssh/authorized_keys is empty: that would lock you out."; exit 1
+fi
 
 # ---- 2. system --------------------------------------------------------------
 say "Updating Ubuntu and installing Docker, git and the firewall"
@@ -57,26 +75,6 @@ if ! swapon --show | grep -q .; then
   fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
-
-say "Locking down remote login (SSH): no passwords"
-cat > /etc/ssh/sshd_config.d/00-funaibuddy-lab.conf <<'EOF'
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin prohibit-password
-EOF
-systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-
-say "Firewall: everything closed except the certificate port and Anthropic's addresses"
-ufw --force reset >/dev/null
-ufw default deny incoming >/dev/null
-ufw default allow outgoing >/dev/null
-ufw allow 80/tcp comment 'HTTPS certificate renewal' >/dev/null
-for range in $LAB_ALLOWED_IPS; do
-  ufw allow proto tcp from "$range" to any port 443 comment 'Claude connector' >/dev/null
-done
-[ "$LAB_SSH" = "keys" ] && ufw limit 22/tcp comment 'SSH, keys only' >/dev/null
-ufw --force enable >/dev/null
-ufw status verbose | sed 's/^/    /'
 
 mkdir -p /etc/docker
 [ -f /etc/docker/daemon.json ] || echo '{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' > /etc/docker/daemon.json
@@ -115,23 +113,48 @@ for project in $(lab projects); do
 done
 lab schedules
 
+if [ -n "$GENERATED" ]; then
+  cat <<EOF
+
+  Your generated connector token. Save it in your password manager NOW,
+  before the next step. ("lab rotate-token" makes a new one.)
+
+      $LAB_TOKEN
+
+EOF
+  ask "Press Enter once the token is saved: " >/dev/null
+fi
+
+# ---- 5. lock the doors (last, so a dropped connection cannot strand the setup) ----
+say "Locking down remote login (SSH): no passwords"
+cat > /etc/ssh/sshd_config.d/00-funaibuddy-lab.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+
+say "Firewall: everything closed except the certificate port and Anthropic's addresses"
+ufw --force reset >/dev/null
+ufw default deny incoming >/dev/null
+ufw default allow outgoing >/dev/null
+ufw allow 80/tcp comment 'HTTPS certificate renewal' >/dev/null
+for range in $LAB_ALLOWED_IPS; do
+  ufw allow proto tcp from "$range" to any port 443 comment 'Claude connector' >/dev/null
+done
+[ "$LAB_SSH" = "keys" ] && ufw limit 22/tcp comment 'SSH, keys only' >/dev/null
+ufw --force enable >/dev/null
+ufw status verbose | sed 's/^/    /'
+
+
 say "Done"
 lab doctor || true
 cat <<EOF
 
   Connector address :  https://$LAB_DOMAIN/mcp
   Request header    :  Authorization: Bearer <your connector token>
+  Remote login      :  $LAB_SSH
 
   In Claude: Settings > Connectors > Add custom connector. Enter the address,
   choose "No sign in", and add the request header above.
 EOF
-if [ -n "$GENERATED" ]; then
-  cat <<EOF
-
-  Your generated connector token (save it in your password manager NOW,
-  it is not shown again; "lab rotate-token" makes a new one):
-
-      $LAB_TOKEN
-
-EOF
-fi
