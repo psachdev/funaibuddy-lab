@@ -7,8 +7,8 @@ ENV_FILE=/etc/funaibuddy-lab/lab.env
 LAB_UID=10001
 
 dc()    { docker compose --project-directory "$REPO_DIR" --env-file "$ENV_FILE" "$@"; }
-admin() { dc exec -T connector python -m labconnector.admin "$@"; }
-once()  { dc run --rm --no-deps -T connector python -m labconnector.admin "$@"; }
+admin() { dc exec -T connector python -m labconnector.admin "$@" </dev/null; }
+once()  { dc run --rm --no-deps -T connector python -m labconnector.admin "$@" </dev/null; }
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "Run as root."; exit 1; }; }
 
 cmd="${1:-help}"; shift || true

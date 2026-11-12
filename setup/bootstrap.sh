@@ -7,6 +7,13 @@
 # It asks for your domain, a connector token, an optional SSH public key, and your project secrets.
 set -euo pipefail
 
+# Everything lives inside main() and is called on the last line. When this file
+# is piped into bash (curl ... | bash), bash reads it a piece at a time from the
+# same pipe the commands use for input; a command that reads its input (docker
+# does) would swallow the rest of the script. Wrapping it in a function makes
+# bash read the whole file before running any of it.
+main() {
+
 REPO_URL="${LAB_REPO_URL:-https://github.com/psachdev/funaibuddy-lab.git}"
 REPO_DIR=/opt/funaibuddy-lab
 ENV_DIR=/etc/funaibuddy-lab
@@ -158,3 +165,6 @@ cat <<EOF
   In Claude: Settings > Connectors > Add custom connector. Enter the address,
   choose "No sign in", and add the request header above.
 EOF
+}
+
+main "$@" </dev/null
