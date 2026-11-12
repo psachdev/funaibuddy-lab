@@ -123,20 +123,34 @@ def build_server(runner: Runner) -> MCPServer:
 
 
 class TokenGate:
-    """Plain ASGI wrapper: no valid bearer token, no service."""
+    """Plain ASGI wrapper: no valid token, no service.
+
+    Accepts the token with or without the word "Bearer" in front, and ignores stray
+    spaces, because people paste it both ways. A wrong token is answered with 404 and
+    a one-line hint in the log (lengths only, never the value).
+    """
 
     def __init__(self, app, token: str):
         if len(token) < 32:
             raise SystemExit("LAB_TOKEN must be at least 32 characters")
-        self.app, self.expected = app, f"Bearer {token}".encode()
+        self.app, self.expected = app, token.encode()
+
+    @staticmethod
+    def presented(headers) -> bytes:
+        value = dict(headers or {}).get(b"authorization", b"").strip()
+        if value[:7].lower() == b"bearer ":
+            value = value[7:].strip()
+        return value
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         if scope["path"] == "/healthz":
             return await self._plain(send, 200, b"ok")
-        given = dict(scope.get("headers") or {}).get(b"authorization", b"")
+        given = self.presented(scope.get("headers"))
         if not hmac.compare_digest(given, self.expected):
+            hint = f"token of {len(given)} characters, expected {len(self.expected)}" if given else "no Authorization header"
+            print(f"refused {scope.get('method')} {scope['path']}: {hint}", flush=True)
             return await self._plain(send, 404, b"not found")
         return await self.app(scope, receive, send)
 

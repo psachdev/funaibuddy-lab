@@ -159,3 +159,13 @@ def test_bad_config_is_refused(tmp_path, body):
 def test_example_config_is_valid():
     projects = load_config(Path(__file__).resolve().parents[2] / "flows.example.yaml")
     assert "nightly" in projects["thesis-monitor"].flows
+
+
+def test_token_is_accepted_with_or_without_bearer():
+    from labconnector.server import TokenGate
+
+    token = b"a" * 40
+    for header in (b"Bearer " + token, b"bearer " + token, token, b"  Bearer  " + token + b" "):
+        assert TokenGate.presented([(b"authorization", header)]) == token
+    assert TokenGate.presented([]) == b""
+    assert TokenGate.presented([(b"authorization", b"Bearer wrong")]) != token
