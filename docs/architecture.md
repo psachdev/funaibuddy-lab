@@ -10,6 +10,8 @@ without giving an AI a free hand on a server.
 
 ## The pieces
 
+![How the lab fits together](img/architecture.png)
+
 ```mermaid
 flowchart LR
     U[You in a Claude chat<br/>phone or any browser] --> A[Claude<br/>Anthropic's cloud]
@@ -34,6 +36,8 @@ flowchart LR
 | **`lab` command** | A short upkeep script | Status, logs, updates, secrets, token rotation |
 
 ## What happens when you ask Claude to run something
+
+![What happens when Claude runs a flow](img/request-sequence.png)
 
 1. You type: *"Run the nightly dry run."*
 2. Claude calls the connector's `run_flow` tool with `project=thesis-monitor`, `flow=nightly-dry-run`.

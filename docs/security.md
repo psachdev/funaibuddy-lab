@@ -4,6 +4,8 @@ Read this before trusting the lab with a key that costs money.
 
 ## Layers
 
+![Seven layers of protection](img/security-layers.png)
+
 | Layer | Stops |
 |---|---|
 | Firewall (ufw): port 443 open only to Anthropic's published range `160.79.104.0/21`; port 80 open for certificate renewal only; everything else closed | Scanners and strangers reaching the connector at all |
