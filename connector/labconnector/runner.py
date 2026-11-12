@@ -122,12 +122,13 @@ class Job:
 
 
 class Runner:
-    def __init__(self, projects: dict[str, Project], projects_dir: Path, secrets_dir: Path, logs_dir: Path, extra_secrets: list[str] | None = None):
+    def __init__(self, projects: dict[str, Project], projects_dir: Path, secrets_dir: Path, logs_dir: Path, extra_secrets: list[str] | None = None, origin: str = "chat"):
         self.projects = projects
         self.projects_dir = Path(projects_dir)
         self.secrets_dir = Path(secrets_dir)
         self.logs_dir = Path(logs_dir)
         self.extra_secrets = list(extra_secrets or [])
+        self.origin = origin  # "chat" (through the connector) or "server" (timer or lab command)
         self._jobs: dict[str, Job] = {}
 
     # ---- lookups -------------------------------------------------------
@@ -248,7 +249,7 @@ class Runner:
             (self.logs_dir / "last").mkdir(parents=True, exist_ok=True)
             (self.logs_dir / "last" / f"{job.project}.{job.flow}.json").write_text(json.dumps(job.public()))
             with (self.logs_dir / "audit.jsonl").open("a") as fh:
-                entry = job.public() | {"params": job.params, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+                entry = job.public() | {"params": job.params, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "epoch": int(time.time()), "via": self.origin}
                 entry.pop("output")
                 fh.write(json.dumps(entry) + "\n")
         except OSError:

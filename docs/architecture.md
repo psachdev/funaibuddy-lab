@@ -26,7 +26,7 @@ flowchart LR
 
 | Piece | What it is | Why it is there |
 |---|---|---|
-| **Connector** | A small Python program speaking MCP (Model Context Protocol, the standard way Claude talks to outside tools) | Offers seven tools: list flows, run a flow, check a job, last run, lab status, list files, read a file |
+| **Connector** | A small Python program speaking MCP (Model Context Protocol, the standard way Claude talks to outside tools) | Offers eight tools: list flows, run a flow, check a job, last run, lab status, list files, read a file, security report |
 | **flows.yaml** | One settings file listing every command that may run | It is the whole permission system: not in the file, not runnable |
 | **Caddy** | A web server that fetches and renews the HTTPS certificate by itself | Encrypts the connection and turns away any address that is not Anthropic's |
 | **Docker** | Packaging that runs the connector in its own sealed box | The same box runs identically on any server, and the box cannot touch the rest of the machine |

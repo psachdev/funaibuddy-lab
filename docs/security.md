@@ -18,6 +18,24 @@ Read this before trusting the lab with a key that costs money.
 | One run at a time per project, hard time limit per flow | Runaway or overlapping jobs |
 | Audit log of every run; automatic security updates | Not noticing what happened; known holes staying open |
 
+## Knowing if something is wrong
+
+Ask Claude for the **security report** (the connector's `security_report` tool). It covers the
+last 24 hours by default:
+
+- every flow run, and whether it came from chat or from the server's own timer
+- requests refused at the door, split into "no token" (routine internet noise) and
+  "wrong token" (someone guessing)
+- remote logins to the server, firewall state, and whether `flows.yaml` still matches the
+  version you last approved with `lab restart`
+
+The server writes its part hourly (`lab security-snapshot`). The report ends with an
+`unusual` list; an empty list means nothing needs attention. It cannot tell your own runs
+from runs made by someone holding your real token, so glance at the run list too.
+
+Rotate the connector token every 90 days, or at once if it may have leaked:
+`lab rotate-token`, then paste the new value into Claude's connector settings.
+
 ## What it does not protect against
 
 - **Your Claude account.** Whoever controls your Claude account can run your

@@ -15,12 +15,64 @@ cmd="${1:-help}"; shift || true
 case "$cmd" in
   up)        need_root; dc up -d --build ;;
   down)      need_root; dc down ;;
-  restart)   need_root; once check && dc up -d --force-recreate ;;
+  restart)   need_root; once check && dc up -d --force-recreate && "$0" accept-flows ;;
   logs)      dc logs --tail "${2:-100}" ${1:-} ;;
   check)     once check ;;
   projects)  once projects ;;
   run)       admin run "$@" ;;
   audit)     tail -n "${1:-20}" /srv/lab/logs/audit.jsonl ;;
+
+  accept-flows)
+    need_root
+    sha256sum /srv/lab/flows.yaml | cut -d' ' -f1 > /etc/funaibuddy-lab/flows.sha256
+    echo "flows.yaml accepted as the approved version." ;;
+
+  security-snapshot)
+    need_root
+    [ -f /etc/funaibuddy-lab/flows.sha256 ] || "$0" accept-flows >/dev/null
+    python3 - <<'PY'
+import hashlib, json, os, re, subprocess, time
+
+def sh(cmd):
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30).stdout
+    except Exception:
+        return ""
+
+journal = sh("journalctl -u ssh -u sshd --since '-24h' -o short-unix --no-pager 2>/dev/null")
+logins, failed = [], 0
+for line in journal.splitlines():
+    m = re.match(r"^(\d+)\.\d+ .*Accepted (\S+) for (\S+) from (\S+)", line)
+    if m:
+        logins.append({"epoch": int(m.group(1)), "at": time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(int(m.group(1)))),
+                       "method": m.group(2), "user": m.group(3), "ip": m.group(4)})
+    elif re.search(r"Invalid user|Failed (password|publickey)|authenticating user .* \[preauth\]|Connection closed by invalid user", line):
+        failed += 1
+
+current = hashlib.sha256(open("/srv/lab/flows.yaml", "rb").read()).hexdigest()
+try:
+    accepted = open("/etc/funaibuddy-lab/flows.sha256").read().strip()
+except OSError:
+    accepted = current
+
+snapshot = {
+    "epoch": int(time.time()),
+    "at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+    "firewall_active": "Status: active" in sh("ufw status"),
+    "ssh_passwords_refused": "passwordauthentication no" in sh("sshd -T 2>/dev/null").lower(),
+    "flows_changed": current != accepted,
+    "ssh_logins": logins[-50:],
+    "ssh_failed_attempts": failed,
+    "reboot_required": os.path.exists("/var/run/reboot-required"),
+}
+tmp = "/srv/lab/logs/host-security.json.tmp"
+with open(tmp, "w") as fh:
+    json.dump(snapshot, fh)
+os.chmod(tmp, 0o644)
+os.replace(tmp, "/srv/lab/logs/host-security.json")
+print("snapshot written:", snapshot["at"], "| logins:", len(logins), "| failed attempts:", failed)
+PY
+    ;;
 
   project-setup)
     need_root; [ -n "${1:-}" ] || { echo "usage: lab project-setup <project>"; exit 1; }
@@ -77,7 +129,26 @@ EOF
       systemctl enable --now "$unit.timer" >/dev/null
       echo "scheduled: $project / $flow  ->  $when"
     done < <(admin schedules)
+    cat > /etc/systemd/system/lab-security-snapshot.service <<EOF
+[Unit]
+Description=funaibuddy-lab: security snapshot
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lab security-snapshot
+EOF
+    cat > /etc/systemd/system/lab-security-snapshot.timer <<EOF
+[Unit]
+Description=Hourly security snapshot
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
     systemctl daemon-reload
+    systemctl enable --now lab-security-snapshot.timer >/dev/null
+    "$0" security-snapshot
     systemctl list-timers 'lab-flow-*' --no-pager 2>/dev/null | head -n 12 || true ;;
 
   update)
@@ -133,6 +204,8 @@ lab — upkeep for a funaibuddy-lab server
   lab project-setup <project>  clone a project and install what it needs
   lab update                 pull the newest funaibuddy-lab and rebuild
   lab rotate-token           replace the connector token
+  lab security-snapshot      record logins, firewall state and flows.yaml status (runs hourly)
+  lab accept-flows           mark the current flows.yaml as approved (lab restart does this)
   lab up | lab down          start or stop everything
 EOF
     ;;

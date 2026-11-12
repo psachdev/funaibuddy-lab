@@ -169,3 +169,44 @@ def test_token_is_accepted_with_or_without_bearer():
         assert TokenGate.presented([(b"authorization", header)]) == token
     assert TokenGate.presented([]) == b""
     assert TokenGate.presented([(b"authorization", b"Bearer wrong")]) != token
+
+
+def test_security_report_flags_what_matters(runner, tmp_path):
+    import json
+    import time
+
+    from labconnector.security import build_report, log_refusal
+
+    logs = runner.logs_dir
+    runner.run_blocking("demo", "hello")
+    assert build_report(logs)["flow_runs"]["from_chat"] == 1
+    # no server snapshot yet -> said so, rather than a false all-clear
+    assert any("snapshot" in u for u in build_report(logs)["unusual"])
+
+    now = int(time.time())
+    (logs / "host-security.json").write_text(json.dumps({
+        "epoch": now, "at": "now", "firewall_active": True, "ssh_passwords_refused": True,
+        "flows_changed": False, "ssh_logins": [], "ssh_failed_attempts": 3, "reboot_required": False}))
+    log_refusal(logs, "203.0.113.9", "POST", "/mcp", 0, 64)  # no token: routine noise
+    report = build_report(logs)
+    assert report["all_clear"] and report["refused_requests"]["without_any_token"] == 1
+
+    log_refusal(logs, "203.0.113.9", "POST", "/mcp", 64, 64)  # wrong token: someone guessing
+    runner.run_blocking("demo", "two-steps")  # a failing flow
+    (logs / "host-security.json").write_text(json.dumps({
+        "epoch": now, "at": "now", "firewall_active": False, "ssh_passwords_refused": True,
+        "flows_changed": True, "ssh_logins": [{"epoch": now, "ip": "198.51.100.7", "user": "root", "method": "publickey"}],
+        "ssh_failed_attempts": 0, "reboot_required": False}))
+    text = " | ".join(build_report(logs)["unusual"])
+    for expected in ("WRONG token", "firewall is OFF", "flows.yaml differs", "remote login", "two-steps"):
+        assert expected in text
+
+
+def test_security_report_reads_old_audit_lines_without_epoch(tmp_path):
+    import time
+
+    from labconnector.security import build_report
+
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - 600))
+    (tmp_path / "audit.jsonl").write_text('{"project":"p","flow":"f","status":"ok","at":"%s"}\n' % stamp)
+    assert build_report(tmp_path)["flow_runs"]["total"] == 1

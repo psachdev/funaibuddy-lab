@@ -47,6 +47,7 @@ def main(argv: list[str]) -> int:
     cmd, args = argv[0], argv[1:]
     try:
         runner = make_runner()
+        runner.origin = "server"
         if cmd == "check":
             n = sum(len(p.flows) for p in runner.projects.values())
             print(f"flows.yaml is valid: {len(runner.projects)} project(s), {n} flow(s)")
